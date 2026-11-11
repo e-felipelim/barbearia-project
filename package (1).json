@@ -1,0 +1,16 @@
+{
+  "name": "barbearia-mvp",
+  "version": "1.0.0",
+  "description": "MVP de agendamento e assinatura com creditos para barbearia",
+  "main": "server.js",
+  "private": true,
+  "scripts": {
+    "start": "node server.js"
+  },
+  "engines": { "node": ">=18 <23" },
+  "dependencies": {
+    "bcryptjs": "^2.4.3",
+    "better-sqlite3": "^11.3.0",
+    "express": "^4.19.2"
+  }
+}

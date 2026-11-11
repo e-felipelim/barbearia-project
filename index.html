@@ -1,0 +1,278 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="theme-color" content="#111827">
+<title>Barbearia - Agendamento</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;font-family:system-ui,-apple-system,Segoe UI,Roboto,sans-serif;background:#f3f4f6;color:#111827;padding-bottom:70px}
+header{background:#111827;color:#fff;padding:12px 16px;display:flex;justify-content:space-between;align-items:center;position:sticky;top:0;z-index:5}
+header b{font-size:18px}
+header button{background:transparent;color:#fff;border:1px solid #6b7280;padding:6px 10px;border-radius:8px}
+main{max-width:720px;margin:0 auto;padding:12px}
+nav{position:fixed;bottom:0;left:0;right:0;background:#fff;border-top:1px solid #e5e7eb;display:flex;overflow-x:auto;z-index:5}
+nav button{flex:1;min-width:76px;border:0;background:none;padding:12px 6px;font-size:13px;color:#6b7280}
+nav button.on{color:#b45309;font-weight:700;border-top:3px solid #b45309;padding-top:9px}
+.card{background:#fff;border-radius:12px;padding:14px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+h2{margin:4px 0 12px;font-size:20px} h3{margin:0 0 8px;font-size:16px}
+label{display:block;font-size:13px;color:#4b5563;margin:10px 0 4px}
+input,select,textarea{width:100%;padding:11px;border:1px solid #d1d5db;border-radius:8px;font-size:16px;background:#fff}
+input[type=checkbox]{width:auto;margin-right:6px}
+.btn{background:#b45309;color:#fff;border:0;padding:12px 16px;border-radius:8px;font-size:15px;font-weight:600;margin-top:10px;cursor:pointer}
+.btn.sec{background:#374151}.btn.red{background:#b91c1c}.btn.green{background:#15803d}.btn.sm{padding:7px 10px;font-size:13px;margin:6px 6px 0 0}
+.btn.block{width:100%}
+.slots{display:grid;grid-template-columns:repeat(auto-fill,minmax(80px,1fr));gap:8px;margin-top:8px}
+.slot{padding:10px;border:1px solid #b45309;color:#b45309;border-radius:8px;background:#fff;font-size:15px}
+.slot.on{background:#b45309;color:#fff}
+.tag{display:inline-block;padding:2px 8px;border-radius:99px;font-size:12px;background:#e5e7eb}
+.tag.agendado,.tag.ativa,.tag.pago{background:#dbeafe}.tag.confirmado,.tag.concluido{background:#dcfce7}
+.tag.cancelado,.tag.falta,.tag.inadimplente,.tag.pendente{background:#fee2e2}.tag.suspenso,.tag.pausada{background:#fef3c7}
+.row{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.muted{color:#6b7280;font-size:13px}
+.kpis{display:grid;grid-template-columns:1fr 1fr;gap:10px}
+.kpi{background:#fff;border-radius:12px;padding:12px;box-shadow:0 1px 3px rgba(0,0,0,.08)}
+.kpi b{display:block;font-size:22px;margin-top:4px}
+#toast{position:fixed;left:12px;right:12px;bottom:80px;background:#111827;color:#fff;padding:12px;border-radius:10px;display:none;z-index:9;text-align:center}
+#toast.err{background:#b91c1c}
+.login{max-width:420px;margin:30px auto}
+.link{color:#b45309;background:none;border:0;text-decoration:underline;font-size:14px;margin-top:12px}
+.alert{background:#fef3c7;border:1px solid #f59e0b;padding:10px;border-radius:8px;margin-bottom:10px;font-size:14px}
+</style>
+</head>
+<body>
+<div id="app"></div>
+<div id="toast"></div>
+<script>
+'use strict';
+const $ = (s) => document.querySelector(s);
+const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+const brl = (v) => 'R$ ' + Number(v || 0).toFixed(2).replace('.', ',');
+const pct = (v) => (Number(v || 0) * 100).toFixed(1).replace('.', ',') + '%';
+const fdt = (iso) => iso ? new Date(iso).toLocaleString('pt-BR', { timeZone: 'America/Sao_Paulo', dateStyle: 'short', timeStyle: 'short' }) : '-';
+const ftime = (iso) => new Date(iso).toLocaleTimeString('pt-BR', { timeZone: 'America/Sao_Paulo', hour: '2-digit', minute: '2-digit' });
+const today = () => new Date(Date.now() - 3 * 3600e3).toISOString().slice(0, 10);
+const spIso = (local) => new Date(local + ':00-03:00').toISOString(); // datetime-local (horario de SP) -> UTC
+
+let token = localStorage.getItem('token');
+let me = null, tab = null, cache = {}, mode = 'login';
+
+function toast(msg, err) {
+  const t = $('#toast'); t.textContent = msg; t.className = err ? 'err' : ''; t.style.display = 'block';
+  clearTimeout(toast.t); toast.t = setTimeout(() => (t.style.display = 'none'), 3500);
+}
+async function api(path, method = 'GET', body) {
+  const r = await fetch('/api' + path, {
+    method, headers: { 'Content-Type': 'application/json', ...(token ? { Authorization: 'Bearer ' + token } : {}) },
+    body: body ? JSON.stringify(body) : undefined,
+  });
+  let d = {}; try { d = await r.json(); } catch (e) { /* sem corpo */ }
+  if (r.status === 401 && token && !path.startsWith('/auth')) { logout(true); throw new Error('Sessao expirada'); }
+  if (!r.ok) throw new Error(d.erro || 'Erro ' + r.status);
+  return d;
+}
+async function act(fn, okMsg) { try { await fn(); if (okMsg) toast(okMsg); await render(); } catch (e) { toast(e.message, true); } }
+
+// ---------- Auth ----------
+function logout(silent) {
+  if (token && !silent) api('/auth/logout', 'POST').catch(() => {});
+  token = null; me = null; localStorage.removeItem('token'); tab = null; render();
+}
+function viewLogin() {
+  return `<div class="login"><div class="card">
+  <h2>💈 Barbearia</h2>
+  ${mode === 'login' ? `
+    <label>E-mail ou telefone</label><input id="lg" autocomplete="username">
+    <label>Senha</label><input id="pw" type="password" autocomplete="current-password">
+    <button class="btn block" onclick="doLogin()">Entrar</button>
+    <button class="link" onclick="mode='register';render()">Criar conta de cliente</button>
+    <p class="muted">Teste: cliente@teste.com / 123456<br>admin@barbearia.com / admin123<br>joao@barbearia.com / 123456</p>
+  ` : `
+    <label>Nome</label><input id="rn">
+    <label>Telefone (com DDD)</label><input id="rt" type="tel" placeholder="11999998888">
+    <label>E-mail (opcional)</label><input id="re" type="email">
+    <label>Data de nascimento (opcional)</label><input id="rb" type="date">
+    <label>Senha (min. 6)</label><input id="rp" type="password">
+    <label><input type="checkbox" id="ra"> Li e aceito os termos: cancelamento ate 4h antes; 1 falta tolerada por ciclo, a partir da 2a ha acrescimo de 20% do servico.</label>
+    <label><input type="checkbox" id="ro"> Aceito receber promocoes por WhatsApp</label>
+    <button class="btn block" onclick="doRegister()">Cadastrar</button>
+    <button class="link" onclick="mode='login';render()">Ja tenho conta</button>`}
+  </div></div>`;
+}
+window.doLogin = () => act(async () => {
+  const d = await api('/auth/login', 'POST', { login: $('#lg').value.trim(), senha: $('#pw').value });
+  token = d.token; localStorage.setItem('token', token);
+});
+window.doRegister = () => act(async () => {
+  const d = await api('/auth/register', 'POST', {
+    nome: $('#rn').value, telefone: $('#rt').value, email: $('#re').value || undefined, data_nascimento: $('#rb').value || undefined,
+    senha: $('#rp').value, aceite_termos: $('#ra').checked, opt_in: $('#ro').checked });
+  token = d.token; localStorage.setItem('token', token);
+});
+
+// ---------- Shell ----------
+const TABS = {
+  cliente: [['inicio', '🏠 Inicio'], ['agendar', '✂️ Agendar'], ['meus', '📅 Meus'], ['plano', '⭐ Plano']],
+  profissional: [['agenda', '📅 Agenda']],
+  admin: [['painel', '📊 Painel'], ['agenda', '📅 Agenda'], ['clientes', '👥 Clientes'], ['cobrancas', '💰 Cobrancas'], ['catalogo', '🛠 Catalogo'], ['bloqueios', '⛔ Bloqueios'], ['logs', '🧾 Logs']],
+};
+async function render() {
+  const app = $('#app');
+  if (!token) { app.innerHTML = viewLogin(); return; }
+  try {
+    const d = await api('/me'); me = d; cache.me = d;
+    const role = d.user.papel;
+    if (!tab || !TABS[role].some((t) => t[0] === tab)) tab = TABS[role][0][0];
+    const body = await views[role][tab]();
+    app.innerHTML = `<header><b>💈 ${esc(d.user.nome)}</b><button onclick="logout()">Sair</button></header>
+      <main>${body}</main>
+      <nav>${TABS[role].map((t) => `<button class="${t[0] === tab ? 'on' : ''}" onclick="tab='${t[0]}';render()">${t[1]}</button>`).join('')}</nav>`;
+  } catch (e) { if (token) toast(e.message, true); }
+}
+
+// ---------- Cliente ----------
+const apptCard = (a, actions) => `<div class="card"><div class="row"><div><b>${esc(a.servico)}</b><div class="muted">${fdt(a.inicio)} · ${esc(a.barbeiro)}</div>
+  ${a.cliente && actions === 'staff' ? `<div class="muted">Cliente: ${esc(a.cliente)} (${esc(a.cliente_telefone)})</div>` : ''}
+  <div class="muted">${a.usou_credito ? '1 credito' : brl(a.valor)}</div></div><span class="tag ${a.status}">${a.status}</span></div>
+  ${actions === 'client' && ['agendado', 'confirmado', 'suspenso'].includes(a.status) ? `<button class="btn sm red" onclick="cancelAppt(${a.id})">Cancelar</button>` : ''}
+  ${actions === 'staff' && ['agendado', 'confirmado'].includes(a.status) ? `<button class="btn sm green" onclick="setSt(${a.id},'concluido')">Concluir</button><button class="btn sm red" onclick="setSt(${a.id},'falta')">Faltou</button><button class="btn sm sec" onclick="cancelAppt(${a.id})">Cancelar</button>` : ''}
+  </div>`;
+window.cancelAppt = (id) => { if (confirm('Cancelar este agendamento?')) act(() => api(`/appointments/${id}/cancel`, 'POST'), 'Agendamento cancelado'); };
+window.setSt = (id, st) => { if (confirm(st === 'falta' ? 'Marcar falta?' : 'Marcar como concluido?')) act(async () => { const r = await api(`/appointments/${id}/status`, 'POST', { status: st }); if (r.taxa) toast('Taxa de falta gerada: ' + brl(r.taxa)); }); };
+
+const subBox = (s) => !s ? '<p class="muted">Voce nao tem assinatura. Veja os planos na aba Plano.</p>' : `
+  <div class="row"><h3>${esc(s.plano)}</h3><span class="tag ${s.status}">${s.status}</span></div>
+  <div style="font-size:30px;font-weight:700">${s.saldo} <span style="font-size:14px;font-weight:400">credito(s)</span></div>
+  <div class="muted">Ciclo ate ${fdt(s.ciclo_fim)} · ${brl(s.preco_mensal)}/mes</div>
+  ${s.status === 'pausada' ? `<div class="muted">Pausa ate ${fdt(s.pausa_fim)}</div>` : ''}
+  ${s.status === 'inadimplente' ? '<div class="alert">Mensalidade em atraso: agendamentos bloqueados. Fale com a barbearia para regularizar.</div>' : ''}`;
+
+let bk = { svc: null, barber: null, date: today(), slot: null, slots: [] };
+const views = {
+  cliente: {
+    async inicio() {
+      const [ap] = await Promise.all([api('/appointments')]);
+      const prox = ap.filter((a) => ['agendado', 'confirmado'].includes(a.status) && new Date(a.inicio) > new Date()).reverse();
+      return `<div class="card">${subBox(me.assinatura)}</div>
+        ${me.pendencias.length ? `<div class="alert"><b>Pendencias:</b> ${me.pendencias.map((p) => `${p.tipo === 'taxa_falta' ? 'Taxa de falta' : p.tipo} ${brl(p.valor)}`).join(' · ')}<br>Pague no proximo atendimento.</div>` : ''}
+        <h2>Proximos horarios</h2>${prox.map((a) => apptCard(a, 'client')).join('') || '<p class="muted">Nenhum horario marcado.</p>'}
+        <button class="btn block" onclick="tab='agendar';render()">Agendar agora</button>`;
+    },
+    async agendar() {
+      const [sv, bb] = await Promise.all([api('/services'), api('/barbers')]);
+      if (!bk.svc && sv[0]) bk.svc = sv[0].id; if (!bk.barber && bb[0]) bk.barber = bb[0].id;
+      bk.slots = bk.svc && bk.barber ? await api(`/slots?barber_id=${bk.barber}&service_id=${bk.svc}&date=${bk.date}`) : [];
+      return `<h2>Novo agendamento</h2><div class="card">
+        <label>Servico</label><select onchange="bk.svc=+this.value;bk.slot=null;render()">${sv.map((s) => `<option value="${s.id}" ${s.id === bk.svc ? 'selected' : ''}>${esc(s.nome)} · ${s.duracao_min}min · ${brl(s.preco)}</option>`).join('')}</select>
+        <label>Barbeiro</label><select onchange="bk.barber=+this.value;bk.slot=null;render()">${bb.map((b) => `<option value="${b.id}" ${b.id === bk.barber ? 'selected' : ''}>${esc(b.nome)}</option>`).join('')}</select>
+        <label>Data</label><input type="date" min="${today()}" value="${bk.date}" onchange="bk.date=this.value;bk.slot=null;render()">
+        <label>Horarios disponiveis</label>
+        <div class="slots">${bk.slots.map((s) => `<button class="slot ${bk.slot === s ? 'on' : ''}" onclick="bk.slot='${s}';render()">${ftime(s)}</button>`).join('') || '<span class="muted">Sem horarios nesta data.</span>'}</div>
+        <button class="btn block" ${bk.slot ? '' : 'disabled style="opacity:.5"'} onclick="confirmBook()">Confirmar agendamento</button></div>`;
+    },
+    async meus() {
+      const ap = await api('/appointments');
+      return `<h2>Meus agendamentos</h2>${ap.map((a) => apptCard(a, 'client')).join('') || '<p class="muted">Nada por aqui.</p>'}
+        <p class="muted">Cancelamento permitido ate 4h antes do horario.</p>`;
+    },
+    async plano() {
+      const pl = await api('/plans'); const s = me.assinatura;
+      return `<h2>Meu plano</h2><div class="card">${subBox(s)}
+        ${s && s.status === 'ativa' ? `<button class="btn sm sec" onclick="subAct(${s.id},'pause','Pausar assinatura por ate 30 dias? Seus agendamentos futuros serao cancelados.')">Pausar</button>` : ''}
+        ${s && s.status === 'pausada' ? `<button class="btn sm green" onclick="subAct(${s.id},'resume')">Retomar</button>` : ''}
+        ${s && ['ativa', 'pausada', 'inadimplente'].includes(s.status) ? `<button class="btn sm red" onclick="subAct(${s.id},'cancel','Cancelar assinatura? O acesso vai ate o fim do ciclo, sem reembolso.')">Cancelar assinatura</button>` : ''}</div>
+        <h3>Planos disponiveis</h3>${pl.map((p) => `<div class="card"><b>${esc(p.nome)}</b> · ${brl(p.preco_mensal)}/mes · ${p.creditos} creditos<div class="muted">Para contratar, fale com a barbearia (pagamento manual).</div></div>`).join('')}`;
+    },
+  },
+  profissional: {
+    async agenda() { return agendaView(false); },
+  },
+  admin: {
+    async painel() {
+      const d = await api('/admin/dashboard');
+      const k = (t, v) => `<div class="kpi"><span class="muted">${t}</span><b>${v}</b></div>`;
+      return `<h2>Painel (${d.periodo})</h2><div class="kpis">
+        ${k('Taxa de ocupacao', pct(d.taxa_ocupacao))}${k('No-show', pct(d.taxa_no_show))}
+        ${k('MRR', brl(d.mrr))}${k('Churn', pct(d.churn))}${k('LTV estimado', d.ltv ? brl(d.ltv) : '-')}
+        ${k('Assinaturas ativas', d.assinaturas_ativas)}${k('Inadimplentes', d.inadimplentes)}${k('Atendimentos', d.atendimentos)}
+        ${k('Faltas', d.faltas)}${k('Cancelados', d.cancelados)}${k('Recebido', brl(d.receita_recebida))}${k('A receber', brl(d.pendente_receber))}</div>`;
+    },
+    async agenda() { return agendaView(true); },
+    async clientes() {
+      const [cl, pl] = await Promise.all([api('/admin/clients'), api('/plans')]);
+      return `<h2>Clientes</h2>${cl.map((c) => { const s = c.assinatura; return `<div class="card"><div class="row"><div><b>${esc(c.nome)}</b><div class="muted">${esc(c.telefone)} ${esc(c.email || '')}</div>
+        <div class="muted">Atendimentos: ${c.atendimentos} · Faltas: ${c.faltas} · Pendente: ${brl(c.pendente)}</div></div>${s ? `<span class="tag ${s.status}">${s.status}</span>` : ''}</div>
+        ${s ? `<div class="muted" style="margin-top:6px">${esc(s.plano)} · saldo ${s.saldo} · vence ${fdt(s.ciclo_fim)}</div>
+          ${['ativa', 'inadimplente'].includes(s.status) ? `<button class="btn sm green" onclick="payRenew(${s.id})">Registrar pagamento / renovar</button>` : ''}
+          ${s.status === 'ativa' ? `<button class="btn sm sec" onclick="subAct(${s.id},'pause','Pausar?')">Pausar</button>` : ''}
+          ${s.status === 'pausada' ? `<button class="btn sm sec" onclick="subAct(${s.id},'resume')">Retomar</button>` : ''}
+          <button class="btn sm red" onclick="subAct(${s.id},'cancel','Cancelar assinatura?')">Cancelar</button>`
+        : `<select id="pl${c.id}" style="margin-top:8px">${pl.map((p) => `<option value="${p.id}">${esc(p.nome)} · ${brl(p.preco_mensal)}</option>`).join('')}</select>
+          <button class="btn sm" onclick="newSub(${c.id})">Ativar plano (pago)</button>`}</div>`; }).join('') || '<p class="muted">Sem clientes.</p>'}`;
+    },
+    async cobrancas() {
+      const [p, g] = await Promise.all([api('/admin/transactions?status=pendente'), api('/admin/transactions?status=pago')]);
+      const item = (t, pend) => `<div class="card"><div class="row"><div><b>${esc(t.cliente)}</b><div class="muted">${t.tipo} · ${fdt(t.criado_em)}</div></div><b>${brl(t.valor)}</b></div>
+        ${pend ? `<button class="btn sm green" onclick="payTx(${t.id})">Marcar pago</button><button class="btn sm red" onclick="cancelTx(${t.id})">Perdoar / estornar</button>` : `<span class="tag pago">pago ${t.forma || ''} ${fdt(t.pago_em)}</span>`}</div>`;
+      return `<h2>Pendentes</h2>${p.map((t) => item(t, true)).join('') || '<p class="muted">Nenhuma pendencia.</p>'}<h2>Pagos (ultimos)</h2>${g.slice(0, 15).map((t) => item(t, false)).join('')}`;
+    },
+    async catalogo() {
+      const [sv, pl, bb] = await Promise.all([api('/services'), api('/plans'), api('/barbers')]);
+      return `<h2>Servicos</h2>${sv.map((s) => `<div class="card row"><span>${esc(s.nome)} · ${s.duracao_min}min</span><b>${brl(s.preco)}</b></div>`).join('')}
+        <div class="card"><h3>Novo servico</h3><input id="sn" placeholder="Nome"><label>Duracao (min)</label><input id="sd" type="number" value="30"><label>Preco</label><input id="sp" type="number" step="0.01" value="40"><button class="btn" onclick="saveSvc()">Salvar</button></div>
+        <h2>Planos</h2>${pl.map((p) => `<div class="card row"><span>${esc(p.nome)} · ${p.creditos} creditos</span><b>${brl(p.preco_mensal)}</b></div>`).join('')}
+        <div class="card"><h3>Novo plano</h3><input id="pn" placeholder="Nome"><label>Creditos por ciclo</label><input id="pc" type="number" value="4"><label>Preco mensal</label><input id="pp" type="number" step="0.01" value="120"><button class="btn" onclick="savePlan()">Salvar</button></div>
+        <h2>Barbeiros</h2>${bb.map((b) => `<div class="card">${esc(b.nome)}</div>`).join('')}
+        <div class="card"><h3>Novo barbeiro</h3><input id="bn" placeholder="Nome"><label>Telefone</label><input id="bt" type="tel"><label>E-mail</label><input id="be" type="email"><label>Senha (min. 6)</label><input id="bp" type="password"><button class="btn" onclick="saveBarber()">Cadastrar</button></div>`;
+    },
+    async bloqueios() {
+      const [bl, bb] = await Promise.all([api('/admin/blocks'), api('/barbers')]);
+      return `<h2>Bloqueios, feriados e ferias</h2>
+        <div class="card"><label>Barbeiro</label><select id="kb"><option value="">Barbearia toda (feriado)</option>${bb.map((b) => `<option value="${b.id}">${esc(b.nome)}</option>`).join('')}</select>
+        <label>Inicio</label><input id="ki" type="datetime-local" value="${today()}T09:00"><label>Fim</label><input id="kf" type="datetime-local" value="${today()}T19:00">
+        <label>Tipo</label><select id="kt"><option value="feriado">Feriado</option><option value="ferias">Ferias</option><option value="pessoal">Pessoal</option></select>
+        <label>Motivo</label><input id="km"><button class="btn block" onclick="saveBlock()">Criar bloqueio</button>
+        <p class="muted">Clientes com horario no periodo recebem aviso para reagendar.</p></div>
+        ${bl.map((b) => `<div class="card row"><div><b>${esc(b.tipo)}</b> · ${esc(b.barbeiro || 'Toda a barbearia')}<div class="muted">${fdt(b.inicio)} → ${fdt(b.fim)} ${esc(b.motivo || '')}</div></div><button class="btn sm red" onclick="delBlock(${b.id})">Remover</button></div>`).join('')}`;
+    },
+    async logs() {
+      const [au, no] = await Promise.all([api('/admin/audit'), api('/admin/notifications')]);
+      return `<h2>Notificacoes WhatsApp</h2>${no.slice(0, 15).map((n) => `<div class="card"><div class="row"><b>${esc(n.template)}</b><span class="tag">${n.status}</span></div><div class="muted">${esc(n.telefone)} · ${fdt(n.agendada_para)}</div><div>${esc(n.texto)}</div></div>`).join('') || '<p class="muted">Nenhuma.</p>'}
+        <h2>Auditoria</h2>${au.map((l) => `<div class="card"><b>${esc(l.acao)}</b> <span class="muted">${esc(l.ator || 'sistema')} · ${fdt(l.criado_em)}</span><div class="muted">${esc(l.detalhe || '')}</div></div>`).join('')}`;
+    },
+  },
+};
+
+// Agenda por dia (profissional/admin)
+let agDate = today();
+async function agendaView(isAdmin) {
+  const ap = await api('/appointments?date=' + agDate);
+  return `<h2>Agenda ${isAdmin ? '(todos)' : ''}</h2><div class="card"><input type="date" value="${agDate}" onchange="agDate=this.value;render()"></div>
+    ${ap.map((a) => apptCard(a, 'staff')).join('') || '<p class="muted">Nenhum agendamento neste dia.</p>'}`;
+}
+
+// ---------- Acoes ----------
+window.confirmBook = () => act(async () => {
+  await api('/appointments', 'POST', { barber_id: bk.barber, service_id: bk.svc, inicio: bk.slot });
+  bk.slot = null; tab = 'meus';
+}, 'Agendamento confirmado!');
+window.subAct = (id, what, msg) => { if (!msg || confirm(msg)) act(() => api(`/subscriptions/${id}/${what}`, 'POST'), 'Feito'); };
+window.payRenew = (id) => act(() => api(`/admin/subscriptions/${id}/pay`, 'POST', { forma: 'pix' }), 'Pagamento registrado');
+window.newSub = (cid) => act(() => api('/admin/subscriptions', 'POST', { client_id: cid, plan_id: +$('#pl' + cid).value, forma: 'pix' }), 'Assinatura ativada');
+window.payTx = (id) => act(() => api(`/admin/transactions/${id}/pay`, 'POST', { forma: 'pix' }), 'Marcado como pago');
+window.cancelTx = (id) => { if (confirm('Perdoar/estornar esta cobranca?')) act(() => api(`/admin/transactions/${id}/cancel`, 'POST'), 'Cobranca cancelada'); };
+window.saveSvc = () => act(() => api('/admin/services', 'POST', { nome: $('#sn').value, duracao_min: +$('#sd').value, preco: +$('#sp').value }), 'Servico salvo');
+window.savePlan = () => act(() => api('/admin/plans', 'POST', { nome: $('#pn').value, creditos: +$('#pc').value, preco_mensal: +$('#pp').value }), 'Plano salvo');
+window.saveBarber = () => act(() => api('/admin/barbers', 'POST', { nome: $('#bn').value, telefone: $('#bt').value, email: $('#be').value || undefined, senha: $('#bp').value }), 'Barbeiro cadastrado');
+window.saveBlock = () => act(async () => {
+  const r = await api('/admin/blocks', 'POST', { barber_id: $('#kb').value ? +$('#kb').value : null, inicio: spIso($('#ki').value), fim: spIso($('#kf').value), tipo: $('#kt').value, motivo: $('#km').value });
+  toast('Bloqueio criado. Clientes avisados: ' + r.afetados);
+});
+window.delBlock = (id) => act(() => api('/admin/blocks/' + id, 'DELETE'), 'Removido');
+
+render();
+</script>
+<script type="module" src="https://static.cloudflareinsights.com/beacon.min.js/vce701823e78c4301a35b7e07294d87301792088814092" integrity="sha512-UKNk8GbxkABxKcXYuLkO16EleLGUkcvJWtpSNmExE0Too3ZaFAxTscNWEc1OdAv5/BikHawapSCaiD2XCmp+Bw==" data-cf-beacon='{"version":"2024.11.0","token":"55d6c902a8a143b1ab6c5051b2a1f75b","spa":2}' crossorigin="anonymous"></script>
+</body>
+</html>

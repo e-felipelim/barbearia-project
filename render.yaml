@@ -1,0 +1,49 @@
+# Blueprint do Render para a Barbearia MVP.
+# Coloque este arquivo na raiz do repositorio com o nome "render.yaml".
+#
+# COM BANCO PERSISTENTE (recomendado): plano "starter" (pago) + disco.
+# O SQLite fica em /var/data e sobrevive a deploys e reinicios.
+#
+# SEM CUSTO (apenas teste): troque "plan: starter" por "plan: free" e APAGUE
+# o bloco "disk" e a variavel DB_FILE. Os dados serao perdidos a cada
+# reinicio/deploy e o app dorme apos 15 min sem acesso.
+
+services:
+  - type: web
+    name: barbearia-mvp
+    runtime: node
+    plan: starter
+    buildCommand: npm install
+    startCommand: npm start
+    healthCheckPath: /healthz
+    disk:
+      name: dados
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_VERSION
+        value: 20
+      - key: DB_FILE
+        value: /var/data/barbearia.db
+      # Senha do dono: o Render gera uma senha aleatoria (veja em Environment)
+      - key: ADMIN_PASSWORD
+        generateValue: true
+      - key: ADMIN_EMAIL
+        value: admin@barbearia.com
+      # true = cria barbeiros e cliente de demonstracao na 1a inicializacao
+      - key: SEED_DEMO
+        value: "true"
+      - key: DEMO_PASSWORD
+        generateValue: true
+      # Chave para baixar backup em /backup?key=...
+      - key: BACKUP_KEY
+        generateValue: true
+      - key: WEBHOOK_SECRET
+        generateValue: true
+      # WhatsApp (Evolution API). Deixe vazio para mensagens simuladas.
+      - key: EVOLUTION_URL
+        sync: false
+      - key: EVOLUTION_INSTANCE
+        sync: false
+      - key: EVOLUTION_API_KEY
+        sync: false

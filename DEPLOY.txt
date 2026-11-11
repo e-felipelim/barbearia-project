@@ -1,0 +1,90 @@
+BARBEARIA MVP - GUIA DE PUBLICACAO
+==================================
+
+ESTRUTURA FINAL (raiz do repositorio)
+-------------------------------------
+barbearia-mvp/
+  package.json
+  server.js
+  render.yaml
+  .gitignore
+  public/
+    index.html     <- o index.html que voce ja baixou (nao mudou)
+
+Conteudo do arquivo .gitignore (crie com este texto):
+node_modules
+data
+*.db
+*.db-wal
+*.db-shm
+.env
+
+
+O QUE MUDOU NO server.js
+------------------------
+- Banco SQLite criado automaticamente (pasta e tabelas) na primeira execucao.
+- Senha do dono vem de ADMIN_PASSWORD (nao ha mais admin123 fixo).
+  Sem a variavel, uma senha aleatoria e gerada e mostrada nos logs.
+- Usuarios de demonstracao so existem se SEED_DEMO=true, com DEMO_PASSWORD.
+- Rota /healthz para a hospedagem e monitores.
+- Rota /backup?key=BACKUP_KEY para baixar o banco (so ativa se BACKUP_KEY existir).
+- trust proxy (rate limit de login usa o IP real), cabecalhos basicos de seguranca.
+- Encerramento limpo do banco ao reiniciar.
+- BUG CORRIGIDO: cadastrar bloqueio (feriado/ferias) falhava por causa de
+  parametros SQL misturados. Agora usa ?1, ?2, ?3.
+- Limpeza automatica de sessoes expiradas.
+- Eu nao executei o codigo. Teste cada tela depois de publicar.
+
+
+PASSO A PASSO NO RENDER
+-----------------------
+1. Crie um repositorio PRIVADO no GitHub e envie todos os arquivos acima.
+2. No Render: New > Blueprint > escolha o repositorio. Ele le o render.yaml.
+   (Alternativa manual: New > Web Service, Build "npm install", Start "npm start".)
+3. Aguarde o deploy. A URL publica sera algo como https://barbearia-mvp.onrender.com
+4. Em Environment, copie ADMIN_PASSWORD e DEMO_PASSWORD.
+5. Entre com admin@barbearia.com e a ADMIN_PASSWORD.
+6. Para producao real: mude SEED_DEMO para false ANTES do primeiro deploy
+   (o seed so roda com banco vazio), ou apague os usuarios de demonstracao depois.
+
+BANCO DE DADOS
+--------------
+- Plano pago + disco (render.yaml como esta): dados persistem em /var/data.
+- Plano gratuito: NAO ha disco persistente. Dados somem a cada reinicio/deploy.
+  Para nao perder tudo, baixe o backup com frequencia:
+     https://SEU-APP.onrender.com/backup?key=SUA_BACKUP_KEY
+- Restaurar: com o app parado, substitua o arquivo barbearia.db no disco.
+- Os precos do Render mudam. Confirme valores do plano e do disco no site.
+
+PLANO GRATUITO E O CRON INTERNO
+-------------------------------
+O app dorme apos ~15 min sem acesso. Enquanto dorme, o cron interno (cobrancas,
+lembretes, inadimplencia, retomada de pausa) NAO roda. Ao acordar ele recupera
+o atraso, mas lembretes de 2h podem ser perdidos. Um monitor de uptime
+(ex.: UptimeRobot) chamando /healthz a cada 5 min mantem o app acordado,
+mas isso e um paliativo. Para uso real, use plano pago.
+
+VARIAVEIS DE AMBIENTE
+---------------------
+ADMIN_EMAIL        e-mail do dono (padrao admin@barbearia.com; so vale na criacao)
+ADMIN_PASSWORD     senha do dono (trocar a variavel troca a senha)
+SEED_DEMO          true/false - cria barbeiros e cliente de demonstracao
+DEMO_PASSWORD      senha dos usuarios de demonstracao (padrao 123456)
+DB_FILE            caminho do SQLite (/var/data/barbearia.db com disco)
+BACKUP_KEY         chave para /backup
+WEBHOOK_SECRET     protege o webhook do WhatsApp
+EVOLUTION_URL, EVOLUTION_INSTANCE, EVOLUTION_API_KEY   (opcionais)
+
+WHATSAPP (opcional)
+-------------------
+Sem EVOLUTION_URL as mensagens sao simuladas (aparecem no painel e nos logs).
+Para enviar de verdade, rode sua Evolution API, conecte um numero e preencha as 3 variaveis.
+No webhook da Evolution (evento MESSAGES_UPSERT), aponte para:
+   https://SEU-APP.onrender.com/api/webhooks/whatsapp?secret=SEU_WEBHOOK_SECRET
+
+TESTE LOCAL
+-----------
+npm install
+ADMIN_PASSWORD=minhasenha SEED_DEMO=true npm start
+Abra http://localhost:3000
+(No Windows PowerShell: $env:ADMIN_PASSWORD="minhasenha"; $env:SEED_DEMO="true"; npm start)
